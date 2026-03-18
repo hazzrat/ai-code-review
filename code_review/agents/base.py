@@ -157,7 +157,13 @@ class BaseAgent(ABC):
             "messages": [
                 {"role": "user", "content": prompt}
             ],
+            # Deterministic settings
+            "temperature": self.config.api.temperature,
         }
+
+        # Add seed for reproducibility if set
+        if self.config.api.seed is not None:
+            payload["seed"] = self.config.api.seed
 
         response = requests.post(
             api_url,

@@ -22,6 +22,8 @@ from .agents.documentation import DocumentationAgent
 from .agents.testing import TestingAgent
 from .agents.accessibility import AccessibilityAgent
 from .agents.database import DatabaseAgent
+from .consensus import ConsensusEngine, ConsensusFinding
+from .cache import FindingCache
 
 
 @dataclass
@@ -301,3 +303,67 @@ class Orchestrator:
             print(f"Verification: {len(raw_findings)} → {len(verified_findings)} findings")
 
         return verified_findings
+
+    def run_with_consensus(
+        self,
+        pr_data: FetchedPR,
+        specific_agents: Optional[list[str]] = None,
+    ) -> tuple[list[Finding], dict]:
+        """Run agents with multi-pass consensus for deterministic results.
+
+        This runs the review multiple times and only reports findings that
+        appear consistently across passes.
+
+        Args:
+            pr_data: Fetched PR data
+            specific_agents: Optional list of specific agents to run
+
+        Returns:
+            Tuple of (findings, consensus_report)
+        """
+        if not self.config.consensus.enabled:
+            # Fall back to single pass
+            return self.run(pr_data, specific_agents), {}
+
+        context = self._build_context(pr_data)
+
+        # Check diff size
+        if len(context.diff_text) > self.config.review.max_diff_size:
+            context.diff_text = context.diff_text[:self.config.review.max_diff_size]
+            context.diff_text += "\n\n... [truncated due to size]"
+
+        # Determine which agents to run
+        agents_to_run = specific_agents if specific_agents else list(self.agents.keys())
+
+        # Initialize consensus engine
+        consensus_engine = ConsensusEngine(self.config)
+
+        if self.config.output.verbose:
+            print(f"Running {self.config.consensus.passes} passes for consensus...")
+
+        # Run multiple passes
+        all_pass_findings = []
+        for pass_num in range(1, self.config.consensus.passes + 1):
+            if self.config.output.verbose:
+                print(f"\n--- Pass {pass_num}/{self.config.consensus.passes} ---")
+
+            pass_findings = self.run(pr_data, specific_agents)
+            all_pass_findings.append(pass_findings)
+
+        # Aggregate findings with consensus
+        consensus_findings, report = consensus_engine.aggregate(all_pass_findings)
+
+        # Filter by threshold
+        threshold = self.config.consensus.threshold
+        filtered_findings = [
+            cf.finding for cf in consensus_findings
+            if cf.consensus_score >= threshold
+        ]
+
+        if self.config.output.verbose:
+            print(f"\nConsensus Report:")
+            print(f"  Total unique findings: {len(consensus_findings)}")
+            print(f"  Findings above threshold ({threshold}): {len(filtered_findings)}")
+            print(f"  Average consensus score: {report.get('average_score', 0):.2f}")
+
+        return filtered_findings, report

@@ -116,6 +116,26 @@ def create_parser() -> argparse.ArgumentParser:
         help="Skip the summary table",
     )
 
+    # Deterministic mode options
+    parser.add_argument(
+        "--consensus",
+        action="store_true",
+        help="Enable multi-pass consensus mode for more deterministic results",
+    )
+
+    parser.add_argument(
+        "--deterministic",
+        action="store_true",
+        help="Enable fully deterministic mode (low temperature + consensus + seed)",
+    )
+
+    parser.add_argument(
+        "--passes",
+        type=int,
+        default=3,
+        help="Number of consensus passes (default: 3)",
+    )
+
     return parser
 
 
@@ -297,6 +317,20 @@ def main(args: Optional[list[str]] = None) -> int:
     if opts.severity:
         config.review.severity_threshold = opts.severity
 
+    # Apply deterministic mode settings
+    if opts.deterministic:
+        config.api.temperature = 0.0  # Fully deterministic
+        config.api.seed = 42  # Fixed seed
+        config.consensus.enabled = True
+        config.consensus.passes = opts.passes
+        if config.output.verbose:
+            console.print("[dim]Deterministic mode: temperature=0.0, seed=42, consensus enabled[/dim]")
+    elif opts.consensus:
+        config.consensus.enabled = True
+        config.consensus.passes = opts.passes
+        if config.output.verbose:
+            console.print(f"[dim]Consensus mode: {opts.passes} passes, threshold={config.consensus.threshold}[/dim]")
+
     try:
         # Determine the target
         target = opts.target
@@ -384,14 +418,21 @@ def main(args: Optional[list[str]] = None) -> int:
 
         # Run agents
         orchestrator = Orchestrator(config)
+        consensus_report = {}
 
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             console=console,
         ) as progress:
-            task = progress.add_task("Running review agents...", total=None)
-            raw_findings = orchestrator.run(pr_data, specific_agents=opts.agents)
+            if config.consensus.enabled:
+                task = progress.add_task(f"Running consensus review ({config.consensus.passes} passes)...", total=None)
+                raw_findings, consensus_report = orchestrator.run_with_consensus(pr_data, specific_agents=opts.agents)
+                if config.output.verbose:
+                    console.print(f"[dim]Consensus: {consensus_report.get('total_findings', 0)} unique findings, avg score: {consensus_report.get('average_score', 0):.2f}[/dim]")
+            else:
+                task = progress.add_task("Running review agents...", total=None)
+                raw_findings = orchestrator.run(pr_data, specific_agents=opts.agents)
 
         if config.output.verbose:
             console.print(f"[dim]Agents found {len(raw_findings)} potential issues[/dim]")

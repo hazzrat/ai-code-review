@@ -15,6 +15,10 @@ class APIConfig:
     model: str = "glm-5"
     max_tokens: int = 4096
     timeout: int = 120
+    # Deterministic settings
+    temperature: float = 0.1  # Lower = more deterministic (0.0 = fully deterministic)
+    top_p: float = 0.95
+    seed: Optional[int] = None  # Fixed seed for reproducibility
 
 
 @dataclass
@@ -23,6 +27,23 @@ class AgentConfig:
     name: str
     enabled: bool = True
     priority: int = 1
+
+
+@dataclass
+class ConsensusConfig:
+    """Multi-pass consensus configuration for deterministic results."""
+    enabled: bool = True
+    passes: int = 3  # Number of passes to run
+    threshold: float = 0.6  # Findings must appear in this fraction of passes
+    min_confidence: float = 0.7  # Minimum confidence for a finding
+
+
+@dataclass
+class CacheConfig:
+    """Caching configuration for deterministic results."""
+    enabled: bool = True
+    ttl_hours: int = 24  # Cache time-to-live
+    max_size_mb: int = 100  # Maximum cache size
 
 
 @dataclass
@@ -65,6 +86,8 @@ class Config:
     review: ReviewConfig = field(default_factory=ReviewConfig)
     agents: list[AgentConfig] = field(default_factory=list)
     verification: VerificationConfig = field(default_factory=VerificationConfig)
+    consensus: ConsensusConfig = field(default_factory=ConsensusConfig)
+    cache: CacheConfig = field(default_factory=CacheConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     review_rules: list[str] = field(default_factory=list)
     claude_md: CLAUDEmdConfig = field(default_factory=CLAUDEmdConfig)
@@ -86,6 +109,10 @@ class Config:
             config.agents = [AgentConfig(**a) for a in data["agents"]]
         if "verification" in data:
             config.verification = VerificationConfig(**data["verification"])
+        if "consensus" in data:
+            config.consensus = ConsensusConfig(**data["consensus"])
+        if "cache" in data:
+            config.cache = CacheConfig(**data["cache"])
         if "output" in data:
             config.output = OutputConfig(**data["output"])
 

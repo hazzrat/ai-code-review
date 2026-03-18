@@ -3,6 +3,10 @@ api:
   model: "glm-5"
   max_tokens: 4096
   timeout: 120
+  # Deterministic settings - lower temperature = more consistent results
+  temperature: 0.1  # 0.0 = fully deterministic, 1.0 = creative
+  top_p: 0.95
+  seed: 42  # Fixed seed for reproducibility (optional - remove for random)
 
 review:
   min_agents: 3
@@ -36,6 +40,20 @@ agents:
 verification:
   enabled: true
   confidence_threshold: 0.7
+
+# Multi-pass consensus for deterministic results
+# Runs the review multiple times and only reports findings that appear consistently
+consensus:
+  enabled: false  # Enable with --consensus flag
+  passes: 3  # Number of passes to run
+  threshold: 0.6  # Findings must appear in this fraction of passes (0.6 = 60%)
+  min_confidence: 0.7  # Minimum confidence for a finding
+
+# Caching for faster repeated reviews
+cache:
+  enabled: true
+  ttl_hours: 24  # Cache time-to-live
+  max_size_mb: 100  # Maximum cache size
 
 output:
   post_comments: true
