@@ -1,0 +1,43 @@
+api:
+  endpoint: "https://api.z.ai/api/anthropic/v1/messages"
+  model: "glm-5"
+  max_tokens: 4096
+  timeout: 120
+
+review:
+  min_agents: 3
+  max_agents: 7
+  severity_threshold: "nit"  # bug, nit, all
+  max_diff_size: 100000  # chars
+
+agents:
+  - name: logic
+    enabled: true
+    priority: 1
+  - name: security
+    enabled: true
+    priority: 1
+  - name: edge_cases
+    enabled: true
+    priority: 2
+  - name: types
+    enabled: true
+    priority: 2
+  - name: regression
+    enabled: true
+    priority: 2
+  - name: claude_md
+    enabled: true
+    priority: 1
+  - name: react_ts
+    enabled: true
+    priority: 1
+
+verification:
+  enabled: true
+  confidence_threshold: 0.7
+
+output:
+  post_comments: true
+  verbose: false
+  format: "github"  # github, json, markdown
