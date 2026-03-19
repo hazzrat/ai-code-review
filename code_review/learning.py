@@ -43,14 +43,14 @@ class PatternLearner:
     RELIABLE_PATTERNS = [
         CodePattern(
             name="hardcoded_api_key",
-            regex=r"(?:api[_-]?key|apikey)\s*[=:]\s*['\"][^'\"]{10,}['\"]",
+            regex=r"(?:api[_-]?key|apikey)\s*[=:]\s*['\"][a-zA-Z0-9_-]{20,}['\"]",
             severity="bug",
             message_template="Hardcoded API key detected",
             confidence=0.95,
         ),
         CodePattern(
             name="hardcoded_secret",
-            regex=r"(?:secret|password|token)\s*[=:]\s*['\"][^'\"]{8,}['\"]",
+            regex=r"(?:secret|password)\s*[=:]\s*['\"][^'\"]{8,}['\"]",
             severity="bug",
             message_template="Hardcoded secret/credential detected",
             confidence=0.95,
