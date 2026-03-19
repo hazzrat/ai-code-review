@@ -136,6 +136,18 @@ def create_parser() -> argparse.ArgumentParser:
         help="Number of consensus passes (default: 3)",
     )
 
+    parser.add_argument(
+        "--robust",
+        action="store_true",
+        help="Enable robust mode for non-deterministic APIs (combines pattern scanning, consensus, validation, and learning)",
+    )
+
+    parser.add_argument(
+        "--no-validation",
+        action="store_true",
+        help="Disable finding validation (faster but less accurate)",
+    )
+
     return parser
 
 
@@ -416,16 +428,29 @@ def main(args: Optional[list[str]] = None) -> int:
             console.print(f"[dim]Context: {len(context_map.get('core_modules', []))} core modules, {len(context_map.get('entry_points', []))} entry points[/dim]")
             console.print(f"[dim]Patterns: {learned_patterns.get('naming_conventions', {})} naming conventions learned[/dim]")
 
+        # Apply robust mode settings
+        if opts.robust:
+            config.consensus.enabled = True
+            config.consensus.passes = opts.passes
+            if config.output.verbose:
+                console.print(f"[dim]Robust mode: pattern scanning + consensus ({opts.passes} passes) + validation + learning[/dim]")
+
         # Run agents
-        orchestrator = Orchestrator(config)
+        orchestrator = Orchestrator(config, repo_path=repo_path)
         consensus_report = {}
+        robust_report = {}
 
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             console=console,
         ) as progress:
-            if config.consensus.enabled:
+            if opts.robust:
+                task = progress.add_task(f"Running robust review...", total=None)
+                raw_findings, robust_report = orchestrator.run_robust(pr_data, specific_agents=opts.agents)
+                if config.output.verbose:
+                    console.print(f"[dim]Robust: {robust_report.get('final_findings', 0)} findings (patterns: {robust_report.get('pattern_findings', 0)})[/dim]")
+            elif config.consensus.enabled:
                 task = progress.add_task(f"Running consensus review ({config.consensus.passes} passes)...", total=None)
                 raw_findings, consensus_report = orchestrator.run_with_consensus(pr_data, specific_agents=opts.agents)
                 if config.output.verbose:

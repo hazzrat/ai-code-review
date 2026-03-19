@@ -3,6 +3,7 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 from .config import Config
@@ -24,6 +25,8 @@ from .agents.accessibility import AccessibilityAgent
 from .agents.database import DatabaseAgent
 from .consensus import ConsensusEngine, ConsensusFinding
 from .cache import FindingCache
+from .validator import FindingValidator, CrossValidator
+from .learning import PatternLearner
 
 
 @dataclass
@@ -55,9 +58,12 @@ AGENT_CLASSES = {
 class Orchestrator:
     """Orchestrates parallel execution of code review agents."""
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, repo_path: Optional[Path] = None):
         self.config = config
         self.agents = self._init_agents()
+        self.validator = FindingValidator(repo_path)
+        self.pattern_learner = PatternLearner()
+        self.cross_validator = CrossValidator(config)
 
     def _init_agents(self) -> dict:
         """Initialize enabled agents."""
@@ -367,3 +373,199 @@ class Orchestrator:
             print(f"  Average consensus score: {report.get('average_score', 0):.2f}")
 
         return filtered_findings, report
+
+    def run_enhanced(
+        self,
+        pr_data: FetchedPR,
+        specific_agents: Optional[list[str]] = None,
+        use_validation: bool = True,
+        use_learning: bool = True,
+    ) -> tuple[list[Finding], dict]:
+        """Run enhanced review with validation and pattern learning.
+
+        This method combines multiple techniques for more reliable results:
+        1. Pattern-based scanning for reliable findings
+        2. Multi-agent analysis
+        3. Finding validation against actual code
+        4. Pattern learning for continuous improvement
+        5. Cross-validation between agents
+
+        Args:
+            pr_data: Fetched PR data
+            specific_agents: Optional list of specific agents to run
+            use_validation: Whether to validate findings against code
+            use_learning: Whether to use learned patterns
+
+        Returns:
+            Tuple of (findings, report)
+        """
+        context = self._build_context(pr_data)
+
+        # Check diff size
+        if len(context.diff_text) > self.config.review.max_diff_size:
+            context.diff_text = context.diff_text[:self.config.review.max_diff_size]
+            context.diff_text += "\n\n... [truncated due to size]"
+
+        # Step 1: Pattern-based scanning for reliable findings
+        pattern_findings = []
+        if use_learning:
+            for file_path, content in pr_data.file_contents.items():
+                pattern_findings_raw = self.pattern_learner.scan_with_patterns(
+                    file_path, content
+                )
+                for pf in pattern_findings_raw:
+                    finding = Finding(
+                        file=pf["file"],
+                        line=pf["line"],
+                        message=pf["message"],
+                        severity=pf["severity"],
+                        confidence=pf["confidence"],
+                        agent=pf["agent"],
+                    )
+                    pattern_findings.append(finding)
+
+        if self.config.output.verbose and pattern_findings:
+            print(f"Pattern scanner found {len(pattern_findings)} reliable findings")
+
+        # Step 2: Run agents
+        agent_findings = self.run(pr_data, specific_agents)
+
+        # Step 3: Combine findings
+        all_findings = pattern_findings + agent_findings
+
+        # Step 4: Validate findings against code
+        validated_findings = all_findings
+        validation_report = {}
+
+        if use_validation:
+            # Cross-validate with file contents
+            validated_findings = self.cross_validator.cross_validate(
+                all_findings,
+                pr_data.file_contents,
+            )
+
+            # Additional validation
+            validated_findings = self.validator.validate_findings(
+                validated_findings,
+                min_confidence=0.4,
+            )
+
+            validation_report = self.validator.get_validation_report(all_findings)
+
+            if self.config.output.verbose:
+                print(f"Validation: {len(all_findings)} -> {len(validated_findings)} findings")
+                print(f"  High confidence: {validation_report.get('high_confidence', 0)}")
+                print(f"  Medium confidence: {validation_report.get('medium_confidence', 0)}")
+
+        # Step 5: Apply learned patterns to adjust confidence
+        if use_learning:
+            for finding in validated_findings:
+                finding.confidence = self.pattern_learner.adjust_confidence(
+                    finding.message,
+                    finding.confidence,
+                )
+
+        # Build report
+        report = {
+            "total_raw_findings": len(all_findings),
+            "total_validated": len(validated_findings),
+            "pattern_findings": len(pattern_findings),
+            "agent_findings": len(agent_findings),
+            "validation": validation_report,
+            "learning_stats": self.pattern_learner.get_stats() if use_learning else {},
+        }
+
+        return validated_findings, report
+
+    def run_robust(
+        self,
+        pr_data: FetchedPR,
+        specific_agents: Optional[list[str]] = None,
+    ) -> tuple[list[Finding], dict]:
+        """Run the most robust review combining all techniques.
+
+        This combines:
+        - Consensus mode (multiple passes)
+        - Pattern-based scanning
+        - Finding validation
+        - Cross-validation
+        - Learning system
+
+        Best for non-deterministic APIs like GLM-5.
+
+        Args:
+            pr_data: Fetched PR data
+            specific_agents: Optional list of specific agents to run
+
+        Returns:
+            Tuple of (findings, report)
+        """
+        # Step 1: Pattern-based scanning (always reliable)
+        pattern_findings = []
+        for file_path, content in pr_data.file_contents.items():
+            pattern_findings_raw = self.pattern_learner.scan_with_patterns(
+                file_path, content
+            )
+            for pf in pattern_findings_raw:
+                finding = Finding(
+                    file=pf["file"],
+                    line=pf["line"],
+                    message=pf["message"],
+                    severity=pf["severity"],
+                    confidence=pf["confidence"],
+                    agent=pf["agent"],
+                )
+                pattern_findings.append(finding)
+
+        if self.config.output.verbose:
+            print(f"Pattern scanner: {len(pattern_findings)} reliable findings")
+
+        # Step 2: Consensus mode for agent findings
+        if self.config.consensus.enabled:
+            consensus_findings, consensus_report = self.run_with_consensus(
+                pr_data, specific_agents
+            )
+        else:
+            consensus_findings = self.run(pr_data, specific_agents)
+            consensus_report = {}
+
+        # Step 3: Cross-validate agent findings
+        validated_agent_findings = self.cross_validator.cross_validate(
+            consensus_findings,
+            pr_data.file_contents,
+        )
+
+        # Step 4: Combine with pattern findings (patterns are pre-validated)
+        all_findings = pattern_findings + validated_agent_findings
+
+        # Step 5: Final validation pass
+        final_findings = self.validator.validate_findings(
+            all_findings,
+            min_confidence=0.5,
+        )
+
+        # Step 6: Adjust confidence based on learning
+        for finding in final_findings:
+            finding.confidence = self.pattern_learner.adjust_confidence(
+                finding.message,
+                finding.confidence,
+            )
+
+        # Build comprehensive report
+        report = {
+            "pattern_findings": len(pattern_findings),
+            "agent_findings_raw": len(consensus_findings),
+            "agent_findings_validated": len(validated_agent_findings),
+            "final_findings": len(final_findings),
+            "consensus": consensus_report,
+            "validation": self.validator.get_validation_report(all_findings),
+            "learning": self.pattern_learner.get_stats(),
+        }
+
+        if self.config.output.verbose:
+            print(f"\nRobust Review Summary:")
+            print(f"  Pattern findings: {len(pattern_findings)}")
+            print(f"  Agent findings (validated): {len(validated_agent_findings)}")
+            print(f"  Final findings: {len(final_findings)}")
+
+        return final_findings, report
